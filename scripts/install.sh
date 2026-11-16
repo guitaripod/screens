@@ -12,3 +12,7 @@ mv -f "$bin/screens.new" "$bin/screens"
 
 rm -rf .build
 "$bin/screens" --version
+case ":$PATH:" in
+    *":$bin:"*) ;;
+    *) echo "note: add $bin to PATH to run screens by name" >&2 ;;
+esac
