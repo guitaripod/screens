@@ -23,7 +23,8 @@ enum Command: Equatable {
     Words after the command are joined, so `screens off lg tv` matches "LG TV".
 
     The built-in display and the last display that is on are never turned off.
-    Displays turned off come back with `screens on`, or at logout or restart.
+    Displays turned off come back with `screens on`, or at logout or restart. A display
+    unplugged and plugged back in while off stays off until logout; status calls it stuck.
 
     Exit status: 0 done or nothing to do, 1 a display could not be changed or no
     display matches, 2 usage error. Also: toggle, list, help, --version.

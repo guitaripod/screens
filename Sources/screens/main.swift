@@ -1,6 +1,6 @@
 import Foundation
 
-let version = "0.2.0"
+let version = "0.3.0"
 
 /// Writes a message to stderr and exits with the given status.
 func fail(_ message: String, status: Int32) -> Never {

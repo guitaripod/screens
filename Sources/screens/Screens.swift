@@ -9,6 +9,7 @@ struct Screens {
     private struct Outcome {
         var changed: [Display] = []
         var failed: [String] = []
+        var notes: [String] = []
     }
 
     private struct Row: Encodable {
@@ -79,7 +80,16 @@ struct Screens {
         guard !targets.isEmpty else {
             return try explainNothingToTurnOn(query, active: active)
         }
-        let outcome = apply(enabled: true, to: targets)
+        let held = stuck(remembered, active: active)
+        var outcome = apply(enabled: true, to: targets.filter { !held.contains($0) })
+        let heldMessages = targets.filter { held.contains($0) }.map {
+            "\($0.name) was replugged or re-detected while off, and macOS keeps such a display off until you log out"
+        }
+        if query == nil {
+            outcome.notes = heldMessages
+        } else {
+            outcome.failed += heldMessages
+        }
         let kept = remembered.filter { entry in !outcome.changed.contains { $0.isSame(as: entry) } }
         try store.save(removingActive(kept, active: (try? Displays.active()) ?? []))
         try report(outcome, verb: "on")
@@ -87,23 +97,32 @@ struct Screens {
 
     private func status(json: Bool) throws {
         let active = try Displays.active()
-        let off = removingActive(try store.load(), active: active)
-        let rows = (active.map { row($0, on: true) } + off.map { row($0, on: false) }).sorted { $0.id < $1.id }
+        let remembered = removingActive(try store.load(), active: active)
+        let held = stuck(remembered, active: active)
+        let rows = (active.map { row($0, state: "on") } + remembered.map { row($0, state: held.contains($0) ? "stuck" : "off") })
+            .sorted { ($0.state == "stuck" ? 1 : 0, $0.id) < ($1.state == "stuck" ? 1 : 0, $1.id) }
         if json {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             print(String(decoding: try encoder.encode(rows), as: UTF8.self))
             return
         }
-        let idWidth = rows.map { String($0.id).count }.max() ?? 0
+        let idText = rows.map { $0.state == "stuck" ? "-" : String($0.id) }
+        let stateWidth = rows.map(\.state.count).max() ?? 0
+        let idWidth = idText.map(\.count).max() ?? 0
         let nameWidth = rows.map(\.name.count).max() ?? 0
         let sizes = rows.map { row in row.width.map { "\($0)x\(row.height ?? 0)" } ?? "" }
         let sizeWidth = sizes.map(\.count).max() ?? 0
-        for (row, size) in zip(rows, sizes) {
+        for (index, row) in rows.enumerated() {
             let hertz = row.hertz.map { $0 > 0 ? "\($0) Hz" : "" } ?? ""
-            let tags = [row.main ? "main" : nil, row.builtIn ? "built-in" : nil].compactMap { $0 }.joined(separator: ", ")
+            let notes = [
+                row.main ? "main" : nil, row.builtIn ? "built-in" : nil,
+                row.state == "stuck" ? "replugged while off; back after logout" : nil,
+            ]
+            let tags = notes.compactMap { $0 }.joined(separator: ", ")
+            let size = sizes[index]
             let line = [
-                padded(row.state, 3), padded(String(row.id), idWidth), padded(row.name, nameWidth),
+                padded(row.state, stateWidth), padded(idText[index], idWidth), padded(row.name, nameWidth),
                 padded(size, sizeWidth), padded(hertz, 6), tags,
             ].joined(separator: "  ")
             print(line.trimmingCharacters(in: .whitespaces))
@@ -118,7 +137,7 @@ struct Screens {
             do {
                 try Displays.setEnabled(enabled, id: display.id)
             } catch DisplayError.configuration(_, let error) where enabled {
-                outcome.failed.append("could not turn on \(display.name): probably unplugged (CGError \(error.rawValue)); plug it in and run `screens on` again")
+                outcome.failed.append("could not turn on \(display.name) (CGError \(error.rawValue)): it is unplugged, or it was replugged while off, which macOS keeps off until you log out")
                 continue
             } catch {
                 outcome.failed.append("could not turn \(enabled ? "on" : "off") \(display.name): \(error)")
@@ -133,9 +152,11 @@ struct Screens {
         return outcome
     }
 
-    /// Prints what changed and throws the failures, so a partial run still says what it did.
+    /// Prints what changed, then notes, then throws the failures, so a partial run still says what it did.
     private func report(_ outcome: Outcome, verb: String) throws {
         if !outcome.changed.isEmpty { print("\(verb): \(names(outcome.changed))") }
+        fflush(stdout)
+        outcome.notes.forEach { FileHandle.standardError.write(Data("screens: note: \($0)\n".utf8)) }
         guard outcome.failed.isEmpty else { throw Failure(description: outcome.failed.joined(separator: "\n")) }
     }
 
@@ -163,11 +184,22 @@ struct Screens {
         remembered.filter { entry in !active.contains { $0.isSame(as: entry) } }
     }
 
+    /// Finds remembered displays whose id now belongs to another display, on now or remembered
+    /// later. They were replugged or re-detected while off, and macOS keeps such a display off,
+    /// with no id at all, until logout; enabling the old id would reach the wrong display.
+    private func stuck(_ remembered: [Display], active: [Display]) -> [Display] {
+        remembered.enumerated().filter { index, entry in
+            let claimed: (Display) -> Bool = { $0.id == entry.id && !$0.isSame(as: entry) }
+            return active.contains(where: claimed) || remembered[(index + 1)...].contains(where: claimed)
+        }.map(\.element)
+    }
+
     /// Builds a status row, reading main display and mode only for displays that are on.
-    private func row(_ display: Display, on: Bool) -> Row {
+    private func row(_ display: Display, state: String) -> Row {
+        let on = state == "on"
         let mode = on ? Displays.mode(of: display.id) : nil
         return Row(
-            id: display.id, uuid: display.uuid, name: display.name, state: on ? "on" : "off",
+            id: display.id, uuid: display.uuid, name: display.name, state: state,
             builtIn: display.builtIn, main: on && Displays.isMain(display.id),
             width: mode?.width, height: mode?.height, hertz: mode?.hertz
         )
