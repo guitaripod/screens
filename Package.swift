@@ -5,9 +5,6 @@ let package = Package(
     name: "screens",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(
-            name: "screens",
-            linkerSettings: [.linkedFramework("CoreGraphics"), .linkedFramework("AppKit")]
-        ),
+        .executableTarget(name: "screens"),
     ]
 )
